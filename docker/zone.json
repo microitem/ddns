@@ -1,0 +1,7 @@
+{
+  "name": "ns1.goodboog.com.",
+  "kind": "Native",
+  "nameservers": ["ns1.goodboog.com."],
+  "masters": [],
+  "dnssec": false
+}

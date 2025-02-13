@@ -1,0 +1,16 @@
+{
+  "rrsets": [
+    {
+      "name": "test.ns1.goodboog.com.",
+      "type": "A",
+      "ttl": 60,
+      "changetype": "REPLACE",
+      "records": [
+        {
+          "content": "1.2.3.4",
+          "disabled": false
+        }
+      ]
+    }
+  ]
+}

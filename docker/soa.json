@@ -1,0 +1,16 @@
+{
+  "rrsets": [
+    {
+      "name": "ns1.goodboog.com.",
+      "type": "SOA",
+      "ttl": 3600,
+      "changetype": "REPLACE",
+      "records": [
+        {
+          "content": "ns1.goodboog.com. admin.goodboog.com. 2025021201 10800 3600 604800 3600",
+          "disabled": false
+        }
+      ]
+    }
+  ]
+}

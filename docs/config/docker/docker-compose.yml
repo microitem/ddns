@@ -1,0 +1,42 @@
+version: '3'
+
+services:
+  mysql:
+    image: mariadb:10.5
+    container_name: ddns_mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: root1234
+      MYSQL_DATABASE: pdns
+      MYSQL_USER: pdns
+      MYSQL_PASSWORD: pdns1234
+    volumes:
+      - ./mysql:/var/lib/mysql
+      - ./pdns.sql:/docker-entrypoint-initdb.d/pdns.sql
+    command: --default-authentication-plugin=mysql_native_password
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "pdns", "-ppdns1234"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  pdns:
+    image: pschiffe/pdns-mysql
+    container_name: ddns_pdns
+    environment:
+      PDNS_gmysql_password: pdns1234
+      PDNS_gmysql_user: pdns
+      PDNS_gmysql_dbname: pdns
+      PDNS_gmysql_host: mysql
+      PDNS_api: "yes"
+      PDNS_api_key: "93dcd5be7ff258f5009814e594cd1cbd22fc0f8428c1620883530d5b6c2037b4"
+      PDNS_webserver: "yes"
+      PDNS_webserver_port: "8081"
+      PDNS_webserver_address: "0.0.0.0"
+      PDNS_webserver_allow_from: "0.0.0.0/0"
+    ports:
+      - "53:53/tcp"
+      - "53:53/udp"
+      - "8081:8081"
+    depends_on:
+      mysql:
+        condition: service_healthy
