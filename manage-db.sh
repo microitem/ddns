@@ -10,19 +10,21 @@ log_message() {
 
 # Funkcia pre zálohu databázy
 backup_db() {
-    local backup_file="${BACKUP_DIR}/db_$(date +%Y%m%d_%H%M%S).sql"
+    local backup_file="${BACKUP_DIR}/db_$(date +%Y%m%d_%H%M%S).sql.gz"
     
-    log_message "Vytváram zálohu databázy"
-    docker-compose exec -T db mysqldump -u${MYSQL_USER} -p${MYSQL_PASSWORD} ${MYSQL_DATABASE} > "$backup_file"
+    echo "=== Zálohujem databázu ==="
+    
+    docker-compose exec -T db mysqldump \
+        -u${MYSQL_USER} \
+        -p${MYSQL_PASSWORD} \
+        ${MYSQL_DATABASE} | gzip > "$backup_file"
     
     if [ $? -eq 0 ]; then
-        echo "Záloha vytvorená: $backup_file"
-        # Kompresia zálohy
-        gzip "$backup_file"
-        log_message "Záloha bola vytvorená: ${backup_file}.gz"
+        log_message "Databáza zálohovaná do: $backup_file"
+        echo "Záloha bola vytvorená: $backup_file"
     else
+        log_message "Chyba pri zálohovaní databázy"
         echo "Chyba pri vytváraní zálohy"
-        log_message "Chyba pri vytváraní zálohy"
         exit 1
     fi
 }
@@ -36,61 +38,174 @@ restore_db() {
         exit 1
     fi
     
-    echo "!!! VAROVANIE !!!"
-    echo "Táto operácia prepíše existujúcu databázu!"
-    read -p "Pokračovať? (y/N) " -n 1 -r
-    echo
-    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-        exit 1
-    fi
+    echo "=== Obnovujem databázu ==="
     
-    log_message "Obnovujem databázu zo zálohy: $backup_file"
-    
-    # Ak je súbor komprimovaný
-    if [[ "$backup_file" == *.gz ]]; then
-        gunzip -c "$backup_file" | docker-compose exec -T db mysql -u${MYSQL_USER} -p${MYSQL_PASSWORD} ${MYSQL_DATABASE}
-    else
-        docker-compose exec -T db mysql -u${MYSQL_USER} -p${MYSQL_PASSWORD} ${MYSQL_DATABASE} < "$backup_file"
-    fi
+    gunzip < "$backup_file" | docker-compose exec -T db mysql \
+        -u${MYSQL_USER} \
+        -p${MYSQL_PASSWORD} \
+        ${MYSQL_DATABASE}
     
     if [ $? -eq 0 ]; then
+        log_message "Databáza obnovená zo zálohy: $backup_file"
         echo "Databáza bola obnovená"
-        log_message "Databáza bola obnovená"
     else
-        echo "Chyba pri obnove databázy"
         log_message "Chyba pri obnove databázy"
+        echo "Chyba pri obnove"
         exit 1
     fi
 }
 
 # Funkcia pre optimalizáciu databázy
 optimize_db() {
-    log_message "Optimalizujem databázu"
+    echo "=== Optimalizujem databázu ==="
     
-    echo "Analyzujem a optimalizujem tabuľky..."
-    docker-compose exec -T db mysqlcheck -u${MYSQL_USER} -p${MYSQL_PASSWORD} --auto-repair --optimize ${MYSQL_DATABASE}
+    # Analýza tabuliek
+    docker-compose exec -T db mysqlcheck \
+        -u${MYSQL_USER} \
+        -p${MYSQL_PASSWORD} \
+        --analyze \
+        ${MYSQL_DATABASE}
     
-    echo "Aktualizujem štatistiky..."
-    docker-compose exec -T db mysql -u${MYSQL_USER} -p${MYSQL_PASSWORD} ${MYSQL_DATABASE} -e "ANALYZE TABLE users, domains, records"
+    # Optimalizácia tabuliek
+    docker-compose exec -T db mysqlcheck \
+        -u${MYSQL_USER} \
+        -p${MYSQL_PASSWORD} \
+        --optimize \
+        ${MYSQL_DATABASE}
     
-    echo "Databáza bola optimalizovaná"
+    log_message "Databáza bola optimalizovaná"
+    echo "Optimalizácia dokončená"
 }
 
 # Funkcia pre kontrolu databázy
 check_db() {
     echo "=== Kontrola databázy ==="
     
-    echo -e "\n== Stav databázy =="
-    docker-compose exec -T db mysqladmin -u${MYSQL_USER} -p${MYSQL_PASSWORD} status
-    
-    echo -e "\n== Veľkosti tabuliek =="
-    docker-compose exec -T db mysql -u${MYSQL_USER} -p${MYSQL_PASSWORD} ${MYSQL_DATABASE} \
-        -e "SELECT table_name, table_rows, data_length/1024/1024 'Data MB', index_length/1024/1024 'Index MB' 
-            FROM information_schema.tables 
-            WHERE table_schema='${MYSQL_DATABASE}'"
-    
+    # Kontrola integrity
     echo -e "\n== Kontrola integrity =="
-    docker-compose exec -T db mysqlcheck -u${MYSQL_USER} -p${MYSQL_PASSWORD} ${MYSQL_DATABASE}
+    docker-compose exec -T db mysqlcheck \
+        -u${MYSQL_USER} \
+        -p${MYSQL_PASSWORD} \
+        --check \
+        ${MYSQL_DATABASE}
+    
+    # Štatistiky
+    echo -e "\n== Štatistiky =="
+    docker-compose exec -T db mysql \
+        -u${MYSQL_USER} \
+        -p${MYSQL_PASSWORD} \
+        -e "SHOW TABLE STATUS FROM ${MYSQL_DATABASE}"
+    
+    # Procesy
+    echo -e "\n== Aktívne procesy =="
+    docker-compose exec -T db mysql \
+        -u${MYSQL_USER} \
+        -p${MYSQL_PASSWORD} \
+        -e "SHOW PROCESSLIST"
+}
+
+# Funkcia pre správu tabuliek
+manage_tables() {
+    local action=$1
+    local table=$2
+    
+    case $action in
+        create)
+            if [ ! -f "sql/${table}.sql" ]; then
+                echo "SQL súbor neexistuje: sql/${table}.sql"
+                exit 1
+            fi
+            
+            docker-compose exec -T db mysql \
+                -u${MYSQL_USER} \
+                -p${MYSQL_PASSWORD} \
+                ${MYSQL_DATABASE} < "sql/${table}.sql"
+            
+            log_message "Vytvorená tabuľka: $table"
+            echo "Tabuľka bola vytvorená"
+            ;;
+            
+        drop)
+            docker-compose exec -T db mysql \
+                -u${MYSQL_USER} \
+                -p${MYSQL_PASSWORD} \
+                ${MYSQL_DATABASE} \
+                -e "DROP TABLE IF EXISTS $table"
+            
+            log_message "Odstránená tabuľka: $table"
+            echo "Tabuľka bola odstránená"
+            ;;
+            
+        truncate)
+            docker-compose exec -T db mysql \
+                -u${MYSQL_USER} \
+                -p${MYSQL_PASSWORD} \
+                ${MYSQL_DATABASE} \
+                -e "TRUNCATE TABLE $table"
+            
+            log_message "Vyčistená tabuľka: $table"
+            echo "Tabuľka bola vyčistená"
+            ;;
+            
+        describe)
+            docker-compose exec -T db mysql \
+                -u${MYSQL_USER} \
+                -p${MYSQL_PASSWORD} \
+                ${MYSQL_DATABASE} \
+                -e "DESCRIBE $table"
+            ;;
+            
+        *)
+            echo "Neznáma akcia: $action"
+            exit 1
+            ;;
+    esac
+}
+
+# Funkcia pre správu používateľov DB
+manage_db_users() {
+    local action=$1
+    local username=$2
+    local password=$3
+    
+    case $action in
+        create)
+            docker-compose exec -T db mysql \
+                -u${MYSQL_USER} \
+                -p${MYSQL_PASSWORD} \
+                -e "CREATE USER '$username'@'%' IDENTIFIED BY '$password'"
+            
+            docker-compose exec -T db mysql \
+                -u${MYSQL_USER} \
+                -p${MYSQL_PASSWORD} \
+                -e "GRANT SELECT, INSERT, UPDATE, DELETE ON ${MYSQL_DATABASE}.* TO '$username'@'%'"
+            
+            log_message "Vytvorený DB používateľ: $username"
+            echo "Používateľ bol vytvorený"
+            ;;
+            
+        drop)
+            docker-compose exec -T db mysql \
+                -u${MYSQL_USER} \
+                -p${MYSQL_PASSWORD} \
+                -e "DROP USER IF EXISTS '$username'@'%'"
+            
+            log_message "Odstránený DB používateľ: $username"
+            echo "Používateľ bol odstránený"
+            ;;
+            
+        list)
+            docker-compose exec -T db mysql \
+                -u${MYSQL_USER} \
+                -p${MYSQL_PASSWORD} \
+                -e "SELECT user, host FROM mysql.user"
+            ;;
+            
+        *)
+            echo "Neznáma akcia: $action"
+            exit 1
+            ;;
+    esac
 }
 
 # Spracovanie parametrov
@@ -107,13 +222,21 @@ case "$1" in
     check)
         check_db
         ;;
+    tables)
+        manage_tables "$2" "$3"
+        ;;
+    users)
+        manage_db_users "$2" "$3" "$4"
+        ;;
     *)
-        echo "Použitie: $0 {backup|restore|optimize|check} [parametre]"
+        echo "Použitie: $0 {backup|restore|optimize|check|tables|users} [parametre]"
         echo "Príklady:"
         echo "  $0 backup"
-        echo "  $0 restore backup_file.sql[.gz]"
+        echo "  $0 restore backup_file"
         echo "  $0 optimize"
         echo "  $0 check"
+        echo "  $0 tables {create|drop|truncate|describe} table"
+        echo "  $0 users {create|drop|list} username [password]"
         exit 1
 esac
 
