@@ -8,75 +8,145 @@ log_message() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" >> ${LOG_DIR}/performance.log
 }
 
-# Funkcia pre kontrolu využitia zdrojov
+# Funkcia pre kontrolu zdrojov
 check_resources() {
-    echo "=== Využitie systémových zdrojov ==="
+    echo "=== Systémové zdroje ==="
     
-    echo "CPU využitie kontajnerov:"
-    docker stats --no-stream --format "table {{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.MemPerc}}"
+    # CPU
+    echo -e "\n== CPU využitie =="
+    top -bn1 | grep "Cpu(s)" | sed "s/.*, *\([0-9.]*\)%* id.*/\1/" | awk '{print "CPU využitie: " (100 - $1) "%"}'
     
-    echo -e "\nVyužitie disku:"
-    df -h ${BASE_DIR} ${LOG_DIR} ${BACKUP_DIR}
+    # Pamäť
+    echo -e "\n== Pamäť =="
+    free -h
     
-    echo -e "\nTop procesy:"
-    top -b -n 1 | head -n 20
+    # Disk
+    echo -e "\n== Diskový priestor =="
+    df -h ${BASE_DIR}
+    
+    # Docker kontajnery
+    echo -e "\n== Docker kontajnery =="
+    docker stats --no-stream --format "table {{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.NetIO}}\t{{.BlockIO}}"
 }
 
-# Funkcia pre kontrolu výkonu databázy
-check_db_performance() {
-    echo "=== Výkon databázy ==="
+# Funkcia pre monitoring výkonu
+monitor_performance() {
+    local duration=${1:-300}  # predvolené 5 minút
+    local interval=${2:-5}    # predvolený interval 5 sekúnd
+    local output_file="${LOG_DIR}/performance_$(date +%Y%m%d_%H%M%S).log"
     
-    echo "Aktívne spojenia:"
-    docker-compose exec -T db mysqladmin -u${MYSQL_USER} -p${MYSQL_PASSWORD} processlist
+    echo "Monitorujem výkon systému po dobu ${duration}s (interval: ${interval}s)..."
     
-    echo -e "\nStatus databázy:"
-    docker-compose exec -T db mysqladmin -u${MYSQL_USER} -p${MYSQL_PASSWORD} status
-    
-    echo -e "\nSlow query log:"
-    docker-compose exec -T db tail -n 20 /var/log/mysql/mysql-slow.log
-}
-
-# Funkcia pre kontrolu výkonu DNS
-check_dns_performance() {
-    echo "=== Výkon DNS servera ==="
-    
-    echo "DNS štatistiky:"
-    docker-compose exec -T pdns pdns_control show "*"
-    
-    echo -e "\nTest DNS odozvy:"
-    dig @localhost ${EXAMPLE_DOMAIN} | grep "Query time"
-}
-
-# Funkcia pre kontrolu výkonu webu
-check_web_performance() {
-    echo "=== Výkon webového servera ==="
-    
-    echo "Apache status:"
-    docker-compose exec -T web apache2ctl status
-    
-    echo -e "\nTest HTTP odozvy:"
-    curl -w "\nČas pripojenia: %{time_connect}s\nČas odpovede: %{time_starttransfer}s\nCelkový čas: %{time_total}s\n" \
-        -o /dev/null -s "http://localhost${API_ENDPOINT}"
-}
-
-# Funkcia pre generovanie výkonnostného reportu
-generate_report() {
-    local report_file="${LOG_DIR}/performance_report_$(date +%Y%m%d).txt"
-    
+    # Hlavička súboru
     {
-        echo "=== Výkonnostný report $(date) ==="
-        echo
-        check_resources
-        echo
-        check_db_performance
-        echo
-        check_dns_performance
-        echo
-        check_web_performance
-    } > "$report_file"
+        echo "=== Monitoring výkonu ==="
+        echo "Začiatok: $(date)"
+        echo "Trvanie: ${duration}s"
+        echo "Interval: ${interval}s"
+        echo "---"
+    } > "$output_file"
     
-    log_message "Výkonnostný report vygenerovaný: $report_file"
-    echo "Report bol vygenerovaný do: $report_file"
+    # Monitoring v cykle
+    end=$((SECONDS + duration))
+    while [ $SECONDS -lt $end ]; do
+        {
+            echo "=== $(date) ==="
+            
+            # CPU
+            top -bn1 | grep "Cpu(s)" | sed "s/.*, *\([0-9.]*\)%* id.*/\1/" | awk '{print "CPU: " (100 - $1) "%"}'
+            
+            # Pamäť
+            free -h | grep "Mem:" | awk '{print "Pamäť: " $3 "/" $2 " (" int($3/$2 * 100) "%)"}'
+            
+            # Disk I/O
+            iostat -x 1 1 | grep -A1 "avg-cpu"
+            
+            # Sieť
+            netstat -i | grep -v "Kernel"
+            
+            # Docker kontajnery
+            docker stats --no-stream --format "{{.Name}}: {{.CPUPerc}} CPU, {{.MemUsage}} MEM, {{.NetIO}} NET, {{.BlockIO}} IO"
+            
+            echo "---"
+        } >> "$output_file"
+        sleep $interval
+    done
+    
+    # Zhrnutie
+    {
+        echo "=== Zhrnutie ==="
+        echo "Koniec: $(date)"
+        echo "Priemerné hodnoty:"
+        
+        # Priemerné CPU využitie
+        echo -n "CPU: "
+        awk '/CPU:/ {sum+=$2; count++} END {print sum/count "%"}' "$output_file"
+        
+        # Priemerné využitie pamäte
+        echo -n "Pamäť: "
+        awk '/Pamäť:/ {sum+=$4; count++} END {print sum/count "%"}' "$output_file"
+    } >> "$output_file"
+    
+    log_message "Monitoring dokončený: $output_file"
+    echo "Monitoring bol dokončený. Výsledky: $output_file"
+}
+
+# Funkcia pre optimalizáciu výkonu
+optimize_performance() {
+    echo "=== Optimalizácia výkonu ==="
+    
+    # Docker optimalizácie
+    echo -e "\n== Optimalizujem Docker =="
+    docker system prune -f
+    
+    # Databázová optimalizácia
+    echo -e "\n== Optimalizujem databázu =="
+    ./manage-db.sh optimize
+    
+    # Cache čistenie
+    echo -e "\n== Čistím cache =="
+    sync; echo 3 > /proc/sys/vm/drop_caches
+    
+    # Kontrola a optimalizácia služieb
+    echo -e "\n== Optimalizujem služby =="
+    
+    # PowerDNS
+    docker-compose exec -T pdns pdns_control purge
+    docker-compose exec -T pdns pdns_control clear-cache
+    
+    # Web server
+    docker-compose exec -T web apache2ctl -t
+    docker-compose exec -T web apache2ctl graceful
+    
+    log_message "Systém bol optimalizovaný"
+    echo "Optimalizácia dokončená"
+}
+
+# Funkcia pre stress test
+stress_test() {
+    local duration=${1:-60}  # predvolené 1 minúta
+    
+    echo "=== Stress test ==="
+    echo "Trvanie: ${duration}s"
+    
+    # Záloha aktuálneho stavu
+    local before_file="${LOG_DIR}/stress_before_$(date +%Y%m%d_%H%M%S).log"
+    check_resources > "$before_file"
+    
+    # Spustenie stress testu
+    echo -e "\n== Spúšťam stress test =="
+    docker run --rm -it progrium/stress --cpu 2 --io 1 --vm 2 --vm-bytes 128M --timeout ${duration}s
+    
+    # Výsledky po teste
+    local after_file="${LOG_DIR}/stress_after_$(date +%Y%m%d_%H%M%S).log"
+    check_resources > "$after_file"
+    
+    # Porovnanie
+    echo -e "\n== Výsledky testu =="
+    echo "Pred testom: $before_file"
+    echo "Po teste: $after_file"
+    
+    log_message "Stress test dokončený"
 }
 
 # Spracovanie parametrov
@@ -84,26 +154,22 @@ case "$1" in
     resources)
         check_resources
         ;;
-    database)
-        check_db_performance
+    monitor)
+        monitor_performance "$2" "$3"
         ;;
-    dns)
-        check_dns_performance
+    optimize)
+        optimize_performance
         ;;
-    web)
-        check_web_performance
-        ;;
-    report)
-        generate_report
+    stress)
+        stress_test "$2"
         ;;
     *)
-        echo "Použitie: $0 {resources|database|dns|web|report}"
+        echo "Použitie: $0 {resources|monitor|optimize|stress} [parametre]"
         echo "Príklady:"
         echo "  $0 resources"
-        echo "  $0 database"
-        echo "  $0 dns"
-        echo "  $0 web"
-        echo "  $0 report"
+        echo "  $0 monitor [duration] [interval]"
+        echo "  $0 optimize"
+        echo "  $0 stress [duration]"
         exit 1
 esac
 
