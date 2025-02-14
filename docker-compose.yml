@@ -20,20 +20,21 @@ services:
       - PDNS_webserver-port=${PDNS_WEBSERVER_PORT}
       - PDNS_webserver-address=${PDNS_WEBSERVER_ADDRESS}
     restart: unless-stopped
-    depends_on:
-      - db
+    networks:
+      - ddns_net
 
   web:
     image: httpd:2.4
     container_name: ddns_web
-    ports:
-      - "${PORTS_HTTP}:80"
-      - "${PORTS_HTTPS}:443"
+    expose:
+      - "80"
     volumes:
       - ${BASE_DIR}/www:/var/www/html
       - ${CONFIG_DIR}/apache:/etc/apache2/sites-enabled
       - ${LOG_DIR}:/var/log/apache2
     restart: unless-stopped
+    networks:
+      - ddns_net
 
   db:
     image: mysql:8.0
@@ -48,3 +49,9 @@ services:
       - ${CONFIG_DIR}/mysql:/etc/mysql/conf.d
       - ${LOG_DIR}:/var/log/mysql
     restart: unless-stopped
+    networks:
+      - ddns_net
+
+networks:
+  ddns_net:
+    external: true
