@@ -10,70 +10,66 @@ log_message() {
 
 # Funkcia pre kontrolu zabezpečenia
 check_security() {
-    echo "=== Kontrola zabezpečenia systému ==="
+    echo "=== Kontrola zabezpečenia ==="
     
-    # Kontrola firewallu
-    echo -e "\n== Firewall =="
+    # Firewall
+    echo -e "\n== Firewall status =="
     ufw status verbose
     
-    # Kontrola fail2ban
-    echo -e "\n== Fail2ban =="
+    # Fail2ban
+    echo -e "\n== Fail2ban status =="
     fail2ban-client status
     
-    # Kontrola SSL
-    echo -e "\n== SSL Certifikáty =="
-    for domain in $(docker-compose -f npm-compose.yml exec -T npm ls /etc/letsencrypt/live/); do
-        echo "Certifikát pre $domain:"
-        docker-compose -f npm-compose.yml exec -T npm openssl x509 -noout -dates -issuer -subject \
-            -in /etc/letsencrypt/live/$domain/cert.pem
+    # SSL certifikáty
+    echo -e "\n== SSL certifikáty =="
+    for domain in $(docker-compose exec -T db mysql -N -u${MYSQL_USER} -p${MYSQL_PASSWORD} ${MYSQL_DATABASE} -e "SELECT name FROM domains"); do
+        echo "Kontrola $domain:"
+        ./manage-ssl.sh check "$domain"
     done
     
-    # Kontrola práv súborov
-    echo -e "\n== Súborové práva =="
-    find ${CONFIG_DIR} ${LOG_DIR} -type f -ls
-    
-    # Kontrola Docker zabezpečenia
+    # Docker zabezpečenie
     echo -e "\n== Docker zabezpečenie =="
-    docker info | grep -i "security"
+    docker info | grep -E "Security|Swarm"
     
-    # Kontrola otvorených portov
+    # Oprávnenia súborov
+    echo -e "\n== Oprávnenia súborov =="
+    ls -la ${BASE_DIR}
+    ls -la ${CONFIG_DIR}
+    
+    # Aktívne porty
     echo -e "\n== Otvorené porty =="
-    netstat -tulpn
-    
-    # Kontrola systémových aktualizácií
-    echo -e "\n== Systémové aktualizácie =="
-    apt list --upgradable
+    netstat -tulpn | grep LISTEN
 }
 
 # Funkcia pre hardening systému
 harden_system() {
     echo "=== Aplikujem bezpečnostné nastavenia ==="
     
-    # Nastavenie firewallu
+    # Firewall pravidlá
+    echo -e "\n== Konfigurujem firewall =="
     ufw default deny incoming
     ufw default allow outgoing
-    ufw allow ${PORTS_SSH}/tcp
-    ufw allow ${PORTS_HTTP}/tcp
-    ufw allow ${PORTS_HTTPS}/tcp
-    ufw allow ${PORTS_DNS_TCP}/tcp
-    ufw allow ${PORTS_DNS_UDP}/udp
+    ufw allow ssh
+    ufw allow http
+    ufw allow https
+    ufw allow 53/tcp
+    ufw allow 53/udp
     ufw --force enable
     
-    # Konfigurácia fail2ban
+    # Fail2ban konfigurácia
+    echo -e "\n== Konfigurujem Fail2ban =="
     cat > /etc/fail2ban/jail.local << EOF
 [DEFAULT]
 bantime = 3600
 findtime = 600
 maxretry = 3
-ignoreip = 127.0.0.1/8 ${ALLOWED_IP_RANGES}
 
 [sshd]
 enabled = true
-port = ${PORTS_SSH}
 
 [ddns-api]
 enabled = true
-port = ${PORTS_HTTP},${PORTS_HTTPS}
+port = http,https
 filter = ddns-api
 logpath = ${LOG_DIR}/api.log
 maxretry = 5
@@ -81,39 +77,100 @@ EOF
     
     systemctl restart fail2ban
     
-    # Nastavenie práv súborov
-    chmod 600 ${CONFIG_DIR}/*.conf
+    # Docker zabezpečenie
+    echo -e "\n== Zabezpečujem Docker =="
+    chmod 660 /var/run/docker.sock
+    
+    # Oprávnenia súborov
+    echo -e "\n== Nastavujem oprávnenia súborov =="
+    chmod 700 ${CONFIG_DIR}
+    chmod 600 ${BASE_DIR}/.env
     chmod 644 ${LOG_DIR}/*.log
     
-    # Aktualizácia systému
-    apt update && apt upgrade -y
+    # SSL konfigurácia
+    echo -e "\n== Optimalizujem SSL konfiguráciu =="
+    docker-compose exec -T web bash -c '
+        sed -i "s/SSLProtocol.*/SSLProtocol all -SSLv3 -TLSv1 -TLSv1.1/" /etc/apache2/mods-available/ssl.conf
+        sed -i "s/SSLCipherSuite.*/SSLCipherSuite ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:DHE-RSA-AES128-GCM-SHA256:DHE-RSA-AES256-GCM-SHA384/" /etc/apache2/mods-available/ssl.conf
+        apache2ctl graceful
+    '
     
     log_message "Systém bol zabezpečený"
     echo "Bezpečnostné nastavenia boli aplikované"
 }
 
-# Funkcia pre audit
-security_audit() {
-    local audit_file="${LOG_DIR}/security_audit_$(date +%Y%m%d).txt"
+# Funkcia pre audit zabezpečenia
+audit_security() {
+    local output_file="${LOG_DIR}/security_audit_$(date +%Y%m%d_%H%M%S).log"
     
+    echo "=== Bezpečnostný audit ===" | tee "$output_file"
+    
+    # Systémové informácie
     {
-        echo "=== Bezpečnostný audit $(date) ==="
-        echo
-        check_security
+        echo -e "\n== Systémové informácie =="
+        uname -a
+        lsb_release -a
         
-        echo -e "\n=== Kontrola logov ==="
-        echo "Posledné neúspešné pokusy o prihlásenie:"
-        grep "Failed password" /var/log/auth.log | tail -10
+        echo -e "\n== Používatelia a skupiny =="
+        cat /etc/passwd
+        cat /etc/group
         
-        echo -e "\nPosledné blokované IP adresy:"
-        fail2ban-client status sshd | grep "Banned IP list"
+        echo -e "\n== Sudo konfigurácia =="
+        cat /etc/sudoers
         
-        echo -e "\nNeobvyklé systémové udalosti:"
-        grep -i "error\|warning\|fail" ${LOG_DIR}/*.log | tail -20
-    } > "$audit_file"
+        echo -e "\n== Sieťové spojenia =="
+        netstat -tulpn
+        
+        echo -e "\n== Procesy =="
+        ps aux
+        
+        echo -e "\n== Inštalované balíčky =="
+        dpkg -l
+        
+        echo -e "\n== Docker konfigurácia =="
+        docker info
+        docker ps -a
+        
+        echo -e "\n== Fail2ban logy =="
+        tail -n 1000 /var/log/fail2ban.log
+        
+        echo -e "\n== Systémové logy =="
+        tail -n 1000 /var/log/syslog
+        tail -n 1000 /var/log/auth.log
+    } >> "$output_file"
     
-    log_message "Bezpečnostný audit vygenerovaný: $audit_file"
-    echo "Audit bol vygenerovaný do: $audit_file"
+    log_message "Vykonaný bezpečnostný audit: $output_file"
+    echo "Audit bol dokončený. Výsledky: $output_file"
+}
+
+# Funkcia pre správu prístupových práv
+manage_access() {
+    local action=$1
+    local target=$2
+    local rights=$3
+    
+    case $action in
+        grant)
+            chmod $rights "$target"
+            log_message "Pridelené práva $rights pre: $target"
+            echo "Práva boli pridelené"
+            ;;
+            
+        revoke)
+            chmod 000 "$target"
+            log_message "Odobraté práva pre: $target"
+            echo "Práva boli odobraté"
+            ;;
+            
+        check)
+            ls -la "$target"
+            ;;
+            
+        *)
+            echo "Neznáma akcia: $action"
+            exit 1
+            ;;
+    esac
 }
 
 # Spracovanie parametrov
@@ -125,14 +182,18 @@ case "$1" in
         harden_system
         ;;
     audit)
-        security_audit
+        audit_security
+        ;;
+    access)
+        manage_access "$2" "$3" "$4"
         ;;
     *)
-        echo "Použitie: $0 {check|harden|audit}"
+        echo "Použitie: $0 {check|harden|audit|access} [parametre]"
         echo "Príklady:"
         echo "  $0 check"
         echo "  $0 harden"
         echo "  $0 audit"
+        echo "  $0 access {grant|revoke|check} target [rights]"
         exit 1
 esac
 
