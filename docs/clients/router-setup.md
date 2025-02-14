@@ -1,49 +1,37 @@
 # Nastavenie routera pre DDNS
 
-## Podporované routery
-Tento návod je primárne určený pre routery s podporou vlastných DDNS poskytovateľov.
-
 ## Všeobecné nastavenie
+1. Webové rozhranie routera (192.168.1.1)
+2. DDNS sekcia:
+   - Provider: Custom
+   - Update URL: http://${EXAMPLE_DOMAIN}${API_ENDPOINT}?hostname=${EXAMPLE_SUBDOMAIN}&password=heslo&ip=[IP]
+   - Hostname: ${EXAMPLE_SUBDOMAIN}
+   - Interval: ${REFRESH_INTERVAL}
 
-### 1. Prístup k nastaveniam routera
-- Otvorte webové rozhranie routera (typicky 192.168.1.1 alebo 192.168.0.1)
-- Prihláste sa s admin právami
-- Nájdite sekciu DDNS alebo Dynamic DNS
+## Port forwarding
+1. NAT/Port Forwarding:
+   - HTTP: ${PORTS_HTTP} -> DS223_IP
+   - HTTPS: ${PORTS_HTTPS} -> DS223_IP
+   - DNS: ${PORTS_DNS_TCP} -> DS223_IP
+   - DNS UDP: ${PORTS_DNS_UDP} -> DS223_IP
 
-### 2. Konfigurácia DDNS
-Vyplňte nasledujúce údaje:
-- DDNS Poskytovateľ: Vlastný
-- Update URL: http://vasa-domena.com/api.php?hostname=[DOMAIN]&password=[PASSWORD]&ip=[IP]
-- Hostname: nas.vasa-domena.com
-- Heslo: vaše_bezpečné_heslo
-- Interval aktualizácie: 300 (5 minút)
-
-### 3. Port forwarding
-Nastavte presmerovanie portov pre DS223:
-- HTTP (port 80) -> IP adresa DS223
-- HTTPS (port 443) -> IP adresa DS223
-- Ďalšie porty podľa potreby
-
-## Špecifické nastavenia pre rôzne modely
-
-### Mikrotik
+## Mikrotik konfigurácia
 /ip cloud
 set ddns-enabled=yes
-set ddns-update-interval=5m
-set update-url="http://vasa-domena.com/api.php\?hostname=nas.vasa-domena.com&password=heslo"
+set ddns-update-interval=${REFRESH_INTERVAL}
+set update-url="http://${EXAMPLE_DOMAIN}${API_ENDPOINT}?hostname=${EXAMPLE_SUBDOMAIN}&password=heslo"
 
-### OpenWrt
-Vytvorte skript `/etc/ddns/custom.sh`:
-#!/bin/sh
-curl -s "http://vasa-domena.com/api.php?hostname=nas.vasa-domena.com&password=heslo&ip=$1"
+## OpenWrt konfigurácia
+/etc/config/ddns:
+config service 'custom'
+    option service_name 'custom'
+    option update_url "http://${EXAMPLE_DOMAIN}${API_ENDPOINT}?hostname=${EXAMPLE_SUBDOMAIN}&password=heslo&ip=[IP]"
+    option check_interval ${REFRESH_INTERVAL}
 
-## Overenie funkčnosti
-1. Skontrolujte logy routera
-2. Overte aktualizáciu IP pomocou:
-   dig nas.vasa-domena.com
+## Logovanie
+- Router logy: ${LOG_DIR}/router.log
+- DDNS update logy: ${LOG_DIR}/ddns_updates.log
 
-## Riešenie problémov
-- Skontrolujte internetové pripojenie
-- Overte správnosť URL a parametrov
-- Skontrolujte firewall nastavenia
-- Overte logy na DDNS serveri
+## Testovanie
+1. curl -v "http://${EXAMPLE_DOMAIN}${API_ENDPOINT}?hostname=${EXAMPLE_SUBDOMAIN}&password=heslo"
+2. dig @8.8.8.8 ${EXAMPLE_SUBDOMAIN}
