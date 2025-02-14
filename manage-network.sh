@@ -10,111 +10,174 @@ log_message() {
 
 # Funkcia pre kontrolu siete
 check_network() {
-    echo "=== Kontrola sieťového pripojenia ==="
+    echo "=== Kontrola siete ==="
     
-    # Kontrola Docker sietí
+    # Sieťové rozhrania
+    echo -e "\n== Sieťové rozhrania =="
+    ip addr show
+    
+    # Docker siete
     echo -e "\n== Docker siete =="
     docker network ls
     docker network inspect ddns_net
     
-    # Kontrola pripojení
-    echo -e "\n== Aktívne pripojenia =="
+    # Aktívne spojenia
+    echo -e "\n== Aktívne spojenia =="
     netstat -tulpn | grep -E "docker|pdns|nginx"
     
-    # Kontrola DNS
+    # DNS test
     echo -e "\n== DNS test =="
     for domain in ${EXAMPLE_DOMAIN} www.${EXAMPLE_DOMAIN}; do
         echo "Test pre $domain:"
-        dig @localhost $domain
-        echo "---"
+        dig @localhost $domain +short
     done
     
-    # Test HTTPS
-    echo -e "\n== HTTPS test =="
-    for domain in ${EXAMPLE_DOMAIN} www.${EXAMPLE_DOMAIN}; do
-        echo "Test pre $domain:"
-        curl -sIL https://$domain | grep -E "HTTP|SSL|Server"
-        echo "---"
-    done
-    
-    # Štatistiky siete
-    echo -e "\n== Sieťové štatistiky =="
-    iftop -t -s 5 2>/dev/null
+    # Firewall
+    echo -e "\n== Firewall pravidlá =="
+    ufw status verbose
 }
 
-# Funkcia pre reset siete
-reset_network() {
-    echo "=== Reset sieťových nastavení ==="
+# Funkcia pre správu Docker sietí
+manage_docker_network() {
+    local action=$1
+    local network=${2:-ddns_net}
     
-    # Zastavenie služieb
-    docker-compose down
-    docker-compose -f npm-compose.yml down
+    case $action in
+        create)
+            docker network create $network
+            log_message "Vytvorená Docker sieť: $network"
+            echo "Sieť bola vytvorená"
+            ;;
+            
+        remove)
+            docker network rm $network
+            log_message "Odstránená Docker sieť: $network"
+            echo "Sieť bola odstránená"
+            ;;
+            
+        inspect)
+            docker network inspect $network
+            ;;
+            
+        connect)
+            local container=$3
+            docker network connect $network $container
+            log_message "Pripojený kontajner $container k sieti $network"
+            echo "Kontajner bol pripojený"
+            ;;
+            
+        disconnect)
+            local container=$3
+            docker network disconnect $network $container
+            log_message "Odpojený kontajner $container od siete $network"
+            echo "Kontajner bol odpojený"
+            ;;
+            
+        *)
+            echo "Neznáma akcia: $action"
+            exit 1
+            ;;
+    esac
+}
+
+# Funkcia pre správu firewallu
+manage_firewall() {
+    local action=$1
+    local port=$2
+    local protocol=${3:-tcp}
     
-    # Odstránenie Docker sietí
-    docker network rm ddns_net || true
+    case $action in
+        allow)
+            ufw allow $port/$protocol
+            log_message "Povolený port $port/$protocol"
+            echo "Port bol povolený"
+            ;;
+            
+        deny)
+            ufw deny $port/$protocol
+            log_message "Zakázaný port $port/$protocol"
+            echo "Port bol zakázaný"
+            ;;
+            
+        delete)
+            ufw delete allow $port/$protocol
+            ufw delete deny $port/$protocol
+            log_message "Odstránené pravidlo pre port $port/$protocol"
+            echo "Pravidlo bolo odstránené"
+            ;;
+            
+        status)
+            ufw status verbose
+            ;;
+            
+        *)
+            echo "Neznáma akcia: $action"
+            exit 1
+            ;;
+    esac
+}
+
+# Funkcia pre diagnostiku siete
+diagnose_network() {
+    local target=${1:-${EXAMPLE_DOMAIN}}
     
-    # Vytvorenie novej siete
-    docker network create ddns_net
+    echo "=== Diagnostika siete pre $target ==="
     
-    # Reštart služieb
-    docker-compose up -d
-    docker-compose -f npm-compose.yml up -d
+    # Ping test
+    echo -e "\n== Ping test =="
+    ping -c 4 $target
     
-    log_message "Sieťové nastavenia boli resetované"
-    echo "Sieť bola resetovaná"
+    # Traceroute
+    echo -e "\n== Traceroute =="
+    traceroute $target
+    
+    # DNS lookup
+    echo -e "\n== DNS lookup =="
+    dig $target +trace
+    
+    # Port scan
+    echo -e "\n== Port scan =="
+    nmap -p- -T4 $target
+    
+    # HTTP test
+    echo -e "\n== HTTP test =="
+    curl -sI "http://$target"
+    curl -sI "https://$target"
+    
+    log_message "Vykonaná diagnostika pre: $target"
 }
 
 # Funkcia pre monitoring siete
 monitor_network() {
     local duration=${1:-300}  # predvolené 5 minút
+    local interval=${2:-5}    # predvolený interval 5 sekúnd
+    local output_file="${LOG_DIR}/network_$(date +%Y%m%d_%H%M%S).log"
     
-    echo "=== Monitoring siete (${duration}s) ==="
+    echo "Monitorujem sieť po dobu ${duration}s (interval: ${interval}s)..."
     
-    # Spustenie monitoringu
-    {
-        echo "Čas začiatku: $(date)"
-        echo
-        
-        echo "== Sieťové pripojenia =="
-        watch -n 10 "netstat -tulpn | grep -E 'docker|pdns|nginx'" &
-        WATCH_PID=$!
-        
-        echo "== Sieťová prevádzka =="
-        iftop -t -s $duration
-        
-        kill $WATCH_PID
-        
-        echo
-        echo "Čas ukončenia: $(date)"
-    } | tee "${LOG_DIR}/network_monitor_$(date +%Y%m%d_%H%M%S).log"
-}
-
-# Funkcia pre diagnostiku
-diagnose_network() {
-    echo "=== Sieťová diagnostika ==="
-    
-    # Test konektivity
-    echo -e "\n== Test konektivity =="
-    for service in pdns web db npm; do
-        echo "Test $service:"
-        docker-compose exec -T $service ping -c 3 1.1.1.1
+    # Monitoring v cykle
+    end=$((SECONDS + duration))
+    while [ $SECONDS -lt $end ]; do
+        {
+            echo "=== $(date) ==="
+            
+            # Sieťové štatistiky
+            echo "== Sieťové rozhrania =="
+            ip -s link
+            
+            echo "== TCP spojenia =="
+            netstat -tn | awk '/^tcp/ {print $6}' | sort | uniq -c
+            
+            echo "== Docker siete =="
+            docker network inspect ddns_net
+            
+            echo "---"
+        } >> "$output_file"
+        sleep $interval
     done
     
-    # Test DNS resolvovania
-    echo -e "\n== Test DNS =="
-    for domain in ${EXAMPLE_DOMAIN} www.${EXAMPLE_DOMAIN}; do
-        echo "Test $domain:"
-        dig +trace $domain
-    done
-    
-    # Test portov
-    echo -e "\n== Test portov =="
-    for port in ${PORTS_HTTP} ${PORTS_HTTPS} ${PORTS_DNS_TCP} ${PORTS_DNS_UDP}; do
-        echo "Test port $port:"
-        nc -zv localhost $port
-    done
-    
-    log_message "Sieťová diagnostika dokončená"
+    log_message "Monitoring siete dokončený: $output_file"
+    echo "Monitoring bol dokončený. Výsledky: $output_file"
 }
 
 # Spracovanie parametrov
@@ -122,22 +185,26 @@ case "$1" in
     check)
         check_network
         ;;
-    reset)
-        reset_network
+    docker)
+        manage_docker_network "$2" "$3" "$4"
         ;;
-    monitor)
-        monitor_network "$2"
+    firewall)
+        manage_firewall "$2" "$3" "$4"
         ;;
     diagnose)
-        diagnose_network
+        diagnose_network "$2"
+        ;;
+    monitor)
+        monitor_network "$2" "$3"
         ;;
     *)
-        echo "Použitie: $0 {check|reset|monitor|diagnose} [parametre]"
+        echo "Použitie: $0 {check|docker|firewall|diagnose|monitor} [parametre]"
         echo "Príklady:"
         echo "  $0 check"
-        echo "  $0 reset"
-        echo "  $0 monitor [seconds]"
-        echo "  $0 diagnose"
+        echo "  $0 docker {create|remove|inspect|connect|disconnect} [network] [container]"
+        echo "  $0 firewall {allow|deny|delete|status} port [protocol]"
+        echo "  $0 diagnose [target]"
+        echo "  $0 monitor [duration] [interval]"
         exit 1
 esac
 
