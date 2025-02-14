@@ -1,63 +1,104 @@
 #!/bin/bash
 
-# Načítanie premenných
-source .env
+# Farby pre výstup
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m'
 
-# Funkcia pre logovanie
-log_message() {
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" >> ${LOG_DIR}/system.log
+# Funkcia pre výpis
+log() {
+    echo -e "${GREEN}[$(date '+%Y-%m-%d %H:%M:%S')] $1${NC}"
+}
+
+error() {
+    echo -e "${RED}[$(date '+%Y-%m-%d %H:%M:%S')] CHYBA: $1${NC}"
+}
+
+warning() {
+    echo -e "${YELLOW}[$(date '+%Y-%m-%d %H:%M:%S')] VAROVANIE: $1${NC}"
 }
 
 # Kontrola root práv
-if [ "$EUID" -ne 0 ]; then 
-    echo "Spustite skript ako root"
+if [ "$EUID" -ne 0 ]; then
+    error "Tento skript musí byť spustený s root právami"
     exit 1
 fi
 
-echo "!!! VAROVANIE !!!"
-echo "Tento skript kompletne odstráni DDNS systém vrátane všetkých dát!"
-echo "Pred pokračovaním sa uistite, že máte zálohu."
-read -p "Pokračovať? (y/N) " -n 1 -r
+# Načítanie premenných
+if [ -f .env ]; then
+    source .env
+else
+    error "Súbor .env neexistuje"
+    exit 1
+fi
+
+# Potvrdenie odinštalácie
+echo -e "${RED}!!! VAROVANIE !!!"
+echo "Táto operácia odstráni celý DDNS systém vrátane:"
+echo "- Všetkých dát a konfigurácie"
+echo "- Docker kontajnerov a obrazov"
+echo "- Všetkých súborov v ${BASE_DIR}"
+echo -e "- Všetkých záloh${NC}"
 echo
-if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+read -p "Ste si istý, že chcete pokračovať? (napíšte 'YES' pre potvrdenie) " confirm
+if [ "$confirm" != "YES" ]; then
+    echo "Odinštalácia zrušená"
     exit 1
 fi
 
-# 1. Zastavenie služieb
-log_message "Zastavujem všetky služby"
-./stop.sh
+# Vytvorenie poslednej zálohy
+log "Vytváram poslednú zálohu..."
+./manage-backups.sh backup
 
-# 2. Odstránenie Docker kontajnerov a obrazov
-log_message "Odstraňujem Docker kontajnery a obrazy"
-docker-compose down -v --rmi all
-docker-compose -f npm-compose.yml down -v --rmi all
-docker network rm ddns_net || true
+# Zastavenie a odstránenie kontajnerov
+log "Zastavujem služby..."
+docker-compose down -v
+docker-compose -f npm-compose.yml down -v
 
-# 3. Odstránenie konfiguračných súborov
-log_message "Odstraňujem konfiguračné súbory"
-rm -rf ${CONFIG_DIR}
-rm -f /etc/cron.d/ddns-*
-rm -f /etc/logrotate.d/ddns
+# Odstránenie Docker obrazov
+log "Odstraňujem Docker obrazy..."
+docker rmi $(docker images -q) -f 2>/dev/null || true
+
+# Odstránenie Docker siete
+log "Odstraňujem Docker sieť..."
+docker network rm ddns_net 2>/dev/null || true
+
+# Odstránenie firewall pravidiel
+log "Odstraňujem firewall pravidlá..."
+ufw delete allow 53/tcp
+ufw delete allow 53/udp
+ufw delete allow http
+ufw delete allow https
+
+# Odstránenie fail2ban konfigurácie
+log "Odstraňujem fail2ban konfiguráciu..."
 rm -f /etc/fail2ban/jail.d/ddns.conf
-rm -f /etc/rsyslog.d/ddns.conf
-
-# 4. Odstránenie dát
-log_message "Odstraňujem dáta"
-rm -rf ${BASE_DIR}
-rm -rf ${LOG_DIR}
-
-# 5. Záloha (ak užívateľ chce)
-read -p "Zachovať zálohy? (Y/n) " -n 1 -r
-echo
-if [[ $REPLY =~ ^[Nn]$ ]]; then
-    log_message "Odstraňujem zálohy"
-    rm -rf ${BACKUP_DIR}
-fi
-
-# 6. Reštart služieb
-systemctl restart rsyslog
+rm -f /etc/fail2ban/filter.d/ddns-api.conf
 systemctl restart fail2ban
 
-log_message "Systém bol kompletne odstránený"
-echo "DDNS systém bol kompletne odstránený"
-echo "Pre novú inštaláciu použite: ./setup-all.sh"
+# Odstránenie adresárov
+log "Odstraňujem súbory..."
+rm -rf ${BASE_DIR}
+
+# Odstránenie používateľských nastavení
+log "Odstraňujem používateľské nastavenia..."
+if [ -d ~/.ddns ]; then
+    rm -rf ~/.ddns
+fi
+
+# Vyčistenie systému
+log "Čistím systém..."
+apt autoremove -y
+apt clean
+
+# Dokončenie
+log "Odinštalácia bola dokončená!"
+echo
+warning "Všetky dáta boli odstránené. Posledná záloha je uložená v: ${BACKUP_DIR}"
+warning "Pre kompletné odstránenie systému môžete teraz odstrániť Docker a ostatné závislosti:"
+echo "apt remove docker-ce docker-ce-cli containerd.io docker-compose-plugin"
+echo "apt remove fail2ban bind9-utils mysql-client"
+echo
+echo "Ďakujeme, že ste používali náš DDNS systém!"
+
