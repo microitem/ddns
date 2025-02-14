@@ -3,24 +3,27 @@
 ## Aktualizácia DNS záznamu
 
 ### Endpoint
-`GET /api.php`
+GET ${API_ENDPOINT}
 
 ### Parametre
-- `hostname` - Názov hostiteľa na aktualizáciu
-- `password` - Heslo pre autentifikáciu
-- `ip` - Nová IP adresa (voliteľné, ak nie je zadané, použije sa IP adresa klienta)
+- hostname: Názov hostiteľa (povinné)
+- password: Heslo pre autentifikáciu (povinné)
+- ip: Nová IP adresa (voliteľné)
 
-### Príklad použitia
-http://ddns.example.com/api.php?hostname=nas.example.com&password=tajneheslo
+### Príklad
+http://${EXAMPLE_DOMAIN}${API_ENDPOINT}?hostname=${EXAMPLE_SUBDOMAIN}&password=heslo
 
 ### Odpovede
-- `OK` - Aktualizácia prebehla úspešne
-- `FAIL` - Aktualizácia zlyhala
-- `BADAUTH` - Nesprávne prihlasovacie údaje
-- `NOTFQDN` - Neplatný formát hostname
-- `NOHOST` - Hostname neexistuje v konfigurácii
+- OK: Aktualizácia úspešná
+- BADAUTH: Nesprávne heslo
+- NOTFQDN: Neplatný hostname
+- NOHOST: Hostname neexistuje
+- FAIL: Iná chyba
 
-### Bezpečnostné odporúčania
-- Používajte HTTPS pre zabezpečenú komunikáciu
-- Používajte silné heslá
-- Obmedzte prístup k API len na potrebné IP adresy
+### Limity
+- Rate limit: 60 požiadaviek/minútu
+- Timeout: 10 sekúnd
+- Max dĺžka hostname: 255 znakov
+
+### Logy
+Všetky požiadavky sa logujú do ${LOG_DIR}/api.log
