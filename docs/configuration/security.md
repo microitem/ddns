@@ -1,123 +1,107 @@
-# Bezpečnostné nastavenia DDNS servera
+# Bezpečnostné nastavenia
 
-## Základné zabezpečenie servera
+## Systémové zabezpečenie
 
-### 1. Aktualizácie systému
-# Pravidelné aktualizácie
-apt update
-apt upgrade -y
-
-# Automatické bezpečnostné aktualizácie
-apt install unattended-upgrades
-dpkg-reconfigure -plow unattended-upgrades
-
-### 2. Firewall nastavenia
-# Povolenie len potrebných portov
+1. Firewall pravidlá:
 ufw default deny incoming
 ufw default allow outgoing
-ufw allow 22/tcp
-ufw allow 53/tcp
-ufw allow 53/udp
-ufw allow 80/tcp
-ufw allow 443/tcp
+ufw allow ${PORTS_SSH}/tcp
+ufw allow ${PORTS_DNS_TCP}/tcp
+ufw allow ${PORTS_DNS_UDP}/udp
+ufw allow ${PORTS_HTTP}/tcp
+ufw allow ${PORTS_HTTPS}/tcp
 ufw enable
 
-## Zabezpečenie služieb
-
-### 1. SSH zabezpečenie
-# Konfigurácia v /etc/ssh/sshd_config
+2. SSH zabezpečenie:
 PermitRootLogin no
 PasswordAuthentication no
 PubkeyAuthentication yes
-AllowUsers vaspouzivatel
+AllowUsers ${SYSTEM_USER}
 Protocol 2
 MaxAuthTries 3
 
-### 2. PowerDNS zabezpečenie
-# Konfigurácia v pdns.conf
-allow-axfr-ips=127.0.0.1
-webserver-address=127.0.0.1
-webserver-allow-from=127.0.0.1
-api-key=silne_heslo
-master=yes
-slave=no
+3. Fail2ban konfigurácia:
+[ddns-auth]
+enabled = true
+filter = ddns-auth
+logpath = ${LOG_DIR}/auth.log
+maxretry = 3
+bantime = 3600
 
-### 3. MySQL zabezpečenie
-# Obmedzenie prístupu
-GRANT ALL PRIVILEGES ON powerdns.* TO 'powerdns'@'localhost';
-REVOKE ALL PRIVILEGES ON powerdns.* FROM 'powerdns'@'%';
+## PowerDNS zabezpečenie
+
+1. API konfigurácia:
+api=yes
+api-key=${PDNS_API_KEY}
+webserver=yes
+webserver-address=${PDNS_WEBSERVER_ADDRESS}
+webserver-allow-from=127.0.0.1
+webserver-password=${PDNS_API_KEY}
+
+2. DNS zabezpečenie:
+allow-axfr-ips=127.0.0.1
+disable-axfr=yes
+local-address=0.0.0.0
+local-port=${PORTS_DNS_TCP}
+
+## MySQL zabezpečenie
+
+1. Prístupové práva:
+GRANT ALL PRIVILEGES ON ${MYSQL_DATABASE}.* TO '${MYSQL_USER}'@'localhost';
+REVOKE ALL PRIVILEGES ON ${MYSQL_DATABASE}.* FROM '${MYSQL_USER}'@'%';
 FLUSH PRIVILEGES;
+
+2. Zabezpečenie pripojenia:
+bind-address = 127.0.0.1
+ssl-cert = ${CONFIG_DIR}/mysql/server-cert.pem
+ssl-key = ${CONFIG_DIR}/mysql/server-key.pem
+require_secure_transport = ON
+
+## Apache zabezpečenie
+
+1. SSL/TLS konfigurácia:
+SSLProtocol all -SSLv3 -TLSv1 -TLSv1.1
+SSLCipherSuite ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256
+SSLHonorCipherOrder on
+SSLCompression off
+SSLSessionTickets off
+
+2. Bezpečnostné hlavičky:
+Header always set Strict-Transport-Security "max-age=31536000"
+Header always set X-Frame-Options "SAMEORIGIN"
+Header always set X-Content-Type-Options "nosniff"
+Header always set X-XSS-Protection "1; mode=block"
 
 ## API zabezpečenie
 
-### 1. Rate limiting
-# Konfigurácia v Apache
+1. Rate limiting:
 <IfModule mod_ratelimit.c>
-    <Location "/api.php">
+    <Location "${API_ENDPOINT}">
         SetOutputFilter RATE_LIMIT
         SetEnv rate-limit 60
     </Location>
 </IfModule>
 
-### 2. IP obmedzenia
-# Konfigurácia v config.php
-$allowed_ips = array(
-    '192.168.1.0/24',
-    'doveryhodna.ip.adresa'
-);
-
-## SSL/TLS nastavenia
-
-### 1. Let's Encrypt certifikát
-# Inštalácia a nastavenie
-certbot certonly --webroot -w /var/www/html -d ddns.vasa-domena.com
-# Automatická obnova
-certbot renew --dry-run
-
-### 2. SSL konfigurácia Apache
-# Moderné SSL nastavenia
-SSLProtocol all -SSLv3 -TLSv1 -TLSv1.1
-SSLCipherSuite ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384
-SSLHonorCipherOrder on
-SSLCompression off
-SSLSessionTickets off
+2. IP obmedzenia:
+<Location "${API_ENDPOINT}">
+    Order deny,allow
+    Deny from all
+    Allow from 127.0.0.1
+    Allow from ${ALLOWED_IP_RANGES}
+</Location>
 
 ## Monitoring a logovanie
 
-### 1. Fail2ban
-# Inštalácia
-apt install fail2ban
-
-# Konfigurácia pre API
-[ddns-api]
-enabled = true
-filter = ddns-api
-logpath = /var/log/apache2/access.log
-maxretry = 3
-bantime = 3600
-
-### 2. Logovanie
-# Centralizované logy
-rsyslog.conf konfigurácia pre vzdialený logging server
+1. Centralizované logovanie:
 *.* @log-server:514
 
-## Pravidelná údržba
-
-### 1. Kontrolný zoznam
-- Kontrola logov
-- Aktualizácia systému
-- Kontrola SSL certifikátov
-- Zálohovanie databázy
-- Kontrola oprávnení súborov
-- Monitoring dostupnosti služby
-
-### 2. Automatizácia
-# Vytvorenie skriptu pre kontrolu
-#!/bin/bash
-# security-check.sh
-# Kontrola služieb
-systemctl status pdns
-# Kontrola logov
-grep ERROR /var/log/syslog
-# Kontrola certifikátov
-certbot certificates
+2. Log rotácia:
+${LOG_DIR}/*.log {
+    daily
+    rotate 7
+    compress
+    delaycompress
+    missingok
+    notifempty
+    create 0640 ${SYSTEM_USER} ${SYSTEM_GROUP}
+}
