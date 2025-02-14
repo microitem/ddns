@@ -1,46 +1,40 @@
 # Konfigurácia Synology DS223
 
-## Príprava
-1. Prihláste sa do DSM (Synology DiskStation Manager)
-2. Otvorte Control Panel
-3. Prejdite do sekcie External Access
+## DDNS nastavenie
+1. Control Panel > External Access > DDNS
+2. Add > Custom Provider
+3. Nastavenia:
+   - Hostname: ${EXAMPLE_SUBDOMAIN}
+   - Provider URL: http://${EXAMPLE_DOMAIN}${API_ENDPOINT}?hostname=__HOSTNAME__&password=__PASSWORD__&ip=__MYIP__
+   - Interval aktualizácie: ${REFRESH_INTERVAL}
 
-## Nastavenie DDNS
+## Porty
+1. Control Panel > Network > Port Forwarding
+   - HTTP: ${PORTS_HTTP}
+   - HTTPS: ${PORTS_HTTPS}
+   - SSH: ${PORTS_SSH}
 
-### 1. Pridanie vlastného DDNS poskytovateľa
-- V sekcii DDNS kliknite na "Add"
-- Vyberte "Custom Provider"
-- Vyplňte nasledujúce údaje:
-  - Hostname: nas.vasa-domena.com
-  - Provider URL: http://vasa-domena.com/api.php?hostname=__HOSTNAME__&password=__PASSWORD__&ip=__MYIP__
-  - Prihlasovacie údaje podľa vašej konfigurácie
+## SSL certifikát
+1. Control Panel > Security > Certificate
+2. Add > Let's Encrypt
+3. Domain: ${EXAMPLE_SUBDOMAIN}
 
-### 2. Nastavenie portov
-V sekcii "Router Configuration":
-- Povoľte automatické presmerovanie portov
-- Nastavte potrebné služby:
-  - DSM (5000, 5001)
-  - File Station (80, 443)
-  - Ďalšie služby podľa potreby
+## Bezpečnosť
+1. Control Panel > Security
+   - Enable firewall
+   - Enable auto-block
+   - Enable 2FA
+   - Enable HTTPS only
 
-### 3. Bezpečnostné nastavenia
-V Control Panel > Security:
-- Povoľte firewall
-- Nastavte automatické blokovanie
-- Povoľte 2-faktorovú autentifikáciu
-- Nakonfigurujte HTTPS certifikát
-
-## Overenie nastavení
-1. Test DDNS:
-   - Počkajte 5 minút na aktualizáciu
-   - Skúste prístup cez nas.vasa-domena.com
-   
-2. Test portov:
-   - Overte prístup cez HTTPS
-   - Skontrolujte všetky povolené služby
+## Logovanie
+- Log Center > Log Search
+- Filter: DDNS updates
+- Export: ${LOG_DIR}/ds223_ddns.log
 
 ## Riešenie problémov
-- Skontrolujte logy v Log Center
-- Overte nastavenia firewallu
-- Skontrolujte pripojenie k internetu
-- Overte nastavenia routera
+1. Test DDNS:
+   curl -v "http://${EXAMPLE_DOMAIN}${API_ENDPOINT}?hostname=${EXAMPLE_SUBDOMAIN}&password=heslo"
+
+2. Test portov:
+   nc -zv ${EXAMPLE_SUBDOMAIN} ${PORTS_HTTP}
+   nc -zv ${EXAMPLE_SUBDOMAIN} ${PORTS_HTTPS}
