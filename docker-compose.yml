@@ -1,0 +1,50 @@
+version: '3'
+
+services:
+  pdns:
+    image: powerdns/pdns-auth-master:latest
+    container_name: ddns_pdns
+    ports:
+      - "${PORTS_DNS_TCP}:53/tcp"
+      - "${PORTS_DNS_UDP}:53/udp"
+    environment:
+      - PDNS_launch=gmysql
+      - PDNS_gmysql-host=db
+      - PDNS_gmysql-port=3306
+      - PDNS_gmysql-user=${MYSQL_USER}
+      - PDNS_gmysql-dbname=${MYSQL_DATABASE}
+      - PDNS_gmysql-password=${MYSQL_PASSWORD}
+      - PDNS_api=yes
+      - PDNS_api-key=${PDNS_API_KEY}
+      - PDNS_webserver=yes
+      - PDNS_webserver-port=${PDNS_WEBSERVER_PORT}
+      - PDNS_webserver-address=${PDNS_WEBSERVER_ADDRESS}
+    restart: unless-stopped
+    depends_on:
+      - db
+
+  web:
+    image: httpd:2.4
+    container_name: ddns_web
+    ports:
+      - "${PORTS_HTTP}:80"
+      - "${PORTS_HTTPS}:443"
+    volumes:
+      - ${BASE_DIR}/www:/var/www/html
+      - ${CONFIG_DIR}/apache:/etc/apache2/sites-enabled
+      - ${LOG_DIR}:/var/log/apache2
+    restart: unless-stopped
+
+  db:
+    image: mysql:8.0
+    container_name: ddns_db
+    environment:
+      - MYSQL_ROOT_PASSWORD=${MYSQL_ROOT_PASSWORD}
+      - MYSQL_DATABASE=${MYSQL_DATABASE}
+      - MYSQL_USER=${MYSQL_USER}
+      - MYSQL_PASSWORD=${MYSQL_PASSWORD}
+    volumes:
+      - ${BASE_DIR}/mysql:/var/lib/mysql
+      - ${CONFIG_DIR}/mysql:/etc/mysql/conf.d
+      - ${LOG_DIR}:/var/log/mysql
+    restart: unless-stopped
