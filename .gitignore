@@ -1,0 +1,39 @@
+# Konfiguračné súbory
+.env
+config.php
+*.conf
+
+# Logy
+*.log
+logs/
+log/
+
+# Zálohy
+backup/
+*.sql
+*.bak
+*.backup
+
+# Docker
+docker-compose.override.yml
+
+# SSL certifikáty
+*.pem
+*.key
+*.crt
+*.csr
+
+# Systémové súbory
+.DS_Store
+Thumbs.db
+
+# IDE súbory
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Dočasné súbory
+tmp/
+temp/
+*.tmp
